@@ -3,13 +3,14 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 
 type IngestResult =
-  | { ok: true; videoId: string; chunkCount: number; transcriptChars: number }
+  | { ok: true; videoId: string; videoUrl: string; chunkCount: number; transcriptChars: number }
   | { error: string };
 
 type QueryResult =
   | {
       ok: true;
       videoId: string;
+      videoUrl?: string;
       model: string;
       answer: string;
       matches: Array<{ id: string; score?: number; chunkIndex?: number }>;
@@ -82,6 +83,7 @@ export default function Home() {
       if (!res.ok) throw new Error(("error" in json && json.error) || "Indexing failed");
       setIngestResult(json);
       if ("ok" in json && json.ok) {
+        setVideoUrl(json.videoUrl);
         fetchVideos();
       }
     } catch (err) {
@@ -115,6 +117,9 @@ export default function Home() {
       const json = (await res.json()) as QueryResult;
       if (!res.ok) throw new Error(("error" in json && json.error) || "Query failed");
       setQueryResult(json);
+      if ("ok" in json && json.ok && json.videoUrl) {
+        setVideoUrl(json.videoUrl);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setQueryResult({ error: message });
@@ -126,10 +131,9 @@ export default function Home() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!videoFile) {
-      setVideoUrl(null);
-      return;
-    }
+    // Only use local URL if we don't have a remote one yet, or if a new file is picked
+    if (!videoFile) return;
+    
     const url = URL.createObjectURL(videoFile);
     setVideoUrl(url);
     return () => URL.revokeObjectURL(url);

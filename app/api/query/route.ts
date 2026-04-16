@@ -24,6 +24,9 @@ export async function POST(req: Request) {
     const { vector: qVec } = await embedText(question, { taskType: "RETRIEVAL_QUERY" });
     const matches = await queryVectors({ namespace: videoId, vector: qVec, topK });
 
+    // Extract videoUrl from the first match that has it
+    const videoUrl = matches.find(m => m.metadata?.videoUrl)?.metadata?.videoUrl as string | undefined;
+
     const contextChunks = matches
       .map((m) => ({
         id: m.id,
@@ -39,6 +42,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       videoId,
+      videoUrl, // Return the R2 URL so the client can play it
       model,
       answer,
       matches: matches.map((m) => ({

@@ -3,6 +3,7 @@ import { chunkText, chunkWords } from "@/lib/chunking";
 import { transcribeWithElevenLabs } from "@/lib/elevenlabs";
 import { embedText } from "@/lib/gemini";
 import { upsertVectors } from "@/lib/pinecone";
+import { uploadFile } from "@/lib/r2";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,8 +25,21 @@ export async function POST(req: Request) {
     const videoId = getString(form, "videoId") || crypto.randomUUID();
     const languageCode = getString(form, "languageCode");
 
+    // 1. Upload to R2 immediately
+    const fileExtension = file.name.split(".").pop() || "mp4";
+    const r2Key = `${videoId}.${fileExtension}`;
+    const videoUrl = await uploadFile(file, r2Key, file.type);
+    console.log(`[Ingest] Uploaded to R2: ${videoUrl}`);
+
+    // 2. "Analyze everything using the URL" 
+    // We re-fetch from the URL to ensure it's accessible and to decouple analysis from the original request body.
+    const urlResponse = await fetch(videoUrl);
+    if (!urlResponse.ok) throw new Error(`Could not fetch video from R2 for analysis: ${urlResponse.statusText}`);
+    const videoBlob = await urlResponse.blob();
+    const videoFileForAnalysis = new File([videoBlob], file.name, { type: file.type });
+
     const { text: transcript, words } = await transcribeWithElevenLabs({
-      file,
+      file: videoFileForAnalysis,
       languageCode,
     });
 
@@ -50,6 +64,7 @@ export async function POST(req: Request) {
         values: vector,
         metadata: {
           videoId,
+          videoUrl, // Store the R2 URL in metadata for session-less retrieval
           chunkIndex: chunk.index,
           text: metadataText,
           sourceFileName: file.name,
@@ -66,11 +81,13 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       videoId,
+      videoUrl,
       transcriptChars: transcript.length,
       chunkCount: chunks.length,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    console.error(`[Ingest Error] ${message}`);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
