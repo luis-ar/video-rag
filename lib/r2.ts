@@ -1,4 +1,5 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { requireEnv } from "@/lib/env";
 
 let cachedS3: S3Client | null = null;
@@ -50,6 +51,28 @@ export async function uploadFile(
   );
 
   return `${publicDomain}/${key}`;
+}
+
+export async function createPresignedUploadUrl(
+  key: string,
+  contentType: string,
+  expiresInSeconds = 3600
+): Promise<{ presignedUrl: string; publicUrl: string }> {
+  const client = getS3Client();
+  const bucketName = requireEnv("R2_BUCKET_NAME");
+  const publicUrl = getPublicUrl(key);
+
+  const command = new PutObjectCommand({
+    Bucket: bucketName,
+    Key: key,
+    ContentType: contentType,
+  });
+
+  const presignedUrl = await getSignedUrl(client, command, {
+    expiresIn: expiresInSeconds,
+  });
+
+  return { presignedUrl, publicUrl };
 }
 
 export function getPublicUrl(key: string): string {

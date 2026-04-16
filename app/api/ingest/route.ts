@@ -8,35 +8,26 @@ import { uploadFile } from "@/lib/r2";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function getString(form: FormData, key: string): string | undefined {
-  const v = form.get(key);
-  if (typeof v === "string" && v.trim()) return v.trim();
-  return undefined;
-}
-
 export async function POST(req: Request) {
   try {
-    const form = await req.formData();
-    const file = form.get("file");
-    if (!(file instanceof File)) {
-      return NextResponse.json({ error: "Missing `file` in multipart form-data" }, { status: 400 });
+    const body = await req.json();
+    const videoUrl = body.videoUrl;
+    const videoId = body.videoId || crypto.randomUUID();
+    const languageCode = body.languageCode;
+
+    if (!videoUrl) {
+      return NextResponse.json({ error: "Missing `videoUrl` in request body" }, { status: 400 });
     }
 
-    const videoId = getString(form, "videoId") || crypto.randomUUID();
-    const languageCode = getString(form, "languageCode");
+    console.log(`[Ingest] Analyzing video from URL: ${videoUrl} (videoId: ${videoId})`);
 
-    // 1. Upload to R2 immediately
-    const fileExtension = file.name.split(".").pop() || "mp4";
-    const r2Key = `${videoId}.${fileExtension}`;
-    const videoUrl = await uploadFile(file, r2Key, file.type);
-    console.log(`[Ingest] Uploaded to R2: ${videoUrl}`);
-
-    // 2. "Analyze everything using the URL" 
-    // We re-fetch from the URL to ensure it's accessible and to decouple analysis from the original request body.
+    // 1. "Analyze everything using the URL" 
+    // We fetch from the URL to perform the transcription/analysis.
     const urlResponse = await fetch(videoUrl);
     if (!urlResponse.ok) throw new Error(`Could not fetch video from R2 for analysis: ${urlResponse.statusText}`);
     const videoBlob = await urlResponse.blob();
-    const videoFileForAnalysis = new File([videoBlob], file.name, { type: file.type });
+    const fileName = videoUrl.split("/").pop() || "video.mp4";
+    const videoFileForAnalysis = new File([videoBlob], fileName, { type: urlResponse.headers.get("content-type") || "video/mp4" });
 
     const { text: transcript, words } = await transcribeWithElevenLabs({
       file: videoFileForAnalysis,
@@ -67,7 +58,7 @@ export async function POST(req: Request) {
           videoUrl, // Store the R2 URL in metadata for session-less retrieval
           chunkIndex: chunk.index,
           text: metadataText,
-          sourceFileName: file.name,
+          sourceFileName: fileName,
           ...(isWordChunk ? { start: chunk.start, end: chunk.end } : {}),
         },
       });

@@ -62,10 +62,13 @@ export default function Home() {
     return videoId.trim();
   }, [ingestResult, videoId]);
 
+  const [ingestStatus, setIngestStatus] = useState<string>("");
+
   async function onIndexVideo(e: React.FormEvent) {
     e.preventDefault();
     setIngestResult(null);
     setQueryResult(null);
+    setIngestStatus("");
 
     if (!videoFile) {
       setIngestResult({ error: "Pick a video/audio file first." });
@@ -74,13 +77,43 @@ export default function Home() {
 
     setIsIndexing(true);
     try {
-      const form = new FormData();
-      form.append("file", videoFile, videoFile.name);
-      if (videoId.trim()) form.append("videoId", videoId.trim());
+      // Step 1: Get presigned URL
+      setIngestStatus("Getting upload permission...");
+      const params = new URLSearchParams({
+        fileName: videoFile.name,
+        contentType: videoFile.type,
+      });
+      if (videoId.trim()) params.append("videoId", videoId.trim());
 
-      const res = await fetch("/api/ingest", { method: "POST", body: form });
-      const json = (await res.json()) as IngestResult;
-      if (!res.ok) throw new Error(("error" in json && json.error) || "Indexing failed");
+      const urlRes = await fetch(`/api/storage/presigned-url?${params.toString()}`);
+      const urlData = await urlRes.json();
+      if (!urlRes.ok) throw new Error(urlData.error || "Failed to get upload URL");
+
+      const { presignedUrl, videoUrl, videoId: finalVideoId } = urlData;
+
+      // Step 2: Upload directly to R2
+      setIngestStatus("Uploading video");
+      const uploadRes = await fetch(presignedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": videoFile.type },
+        body: videoFile,
+      });
+      if (!uploadRes.ok) throw new Error("Upload to R2 failed");
+
+      // Step 3: Trigger ingestion/analysis
+      setIngestStatus("Analyzing video content...");
+      const ingestRes = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoUrl,
+          videoId: finalVideoId,
+        }),
+      });
+
+      const json = (await ingestRes.json()) as IngestResult;
+      if (!ingestRes.ok) throw new Error(("error" in json && json.error) || "Indexing failed");
+      
       setIngestResult(json);
       if ("ok" in json && json.ok) {
         setVideoUrl(json.videoUrl);
@@ -91,6 +124,7 @@ export default function Home() {
       setIngestResult({ error: message });
     } finally {
       setIsIndexing(false);
+      setIngestStatus("");
     }
   }
 
@@ -222,7 +256,7 @@ export default function Home() {
               disabled={isIndexing}
               className="inline-flex h-11 items-center justify-center rounded-xl bg-black px-4 text-sm font-medium text-white disabled:opacity-60 dark:bg-white dark:text-black"
             >
-              {isIndexing ? "Indexing…" : "Index video"}
+              {isIndexing ? (ingestStatus || "Indexing…") : "Index video"}
             </button>
           </form>
 
