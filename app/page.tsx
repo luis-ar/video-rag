@@ -131,7 +131,6 @@ export default function Home() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    // Only use local URL if we don't have a remote one yet, or if a new file is picked
     if (!videoFile) return;
     
     const url = URL.createObjectURL(videoFile);
