@@ -12,6 +12,7 @@ import { uploadFile } from "@/lib/r2";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300; // 5 minutes
 
 export async function POST(req: Request) {
   try {
@@ -44,19 +45,22 @@ export async function POST(req: Request) {
       type: urlResponse.headers.get("content-type") || "video/mp4",
     });
 
-    const { text: transcript, words } = await transcribeWithElevenLabs({
-      file: videoFileForAnalysis,
-      languageCode,
-    });
+    // 1. Parallelize ElevenLabs and Gemini Upload/Wait
+    console.log(`[Ingest] Starting transcription and Gemini upload in parallel...`);
+    const [transcriptionResult, geminiFileUri] = await Promise.all([
+      transcribeWithElevenLabs({
+        file: videoFileForAnalysis,
+        languageCode,
+      }),
+      (async () => {
+        const uri = await uploadToGemini(videoBlob, fileName);
+        await waitForGeminiFile(uri);
+        return uri;
+      })(),
+    ]);
 
-    // 2. Upload to Gemini for Multimodal Analysis
-    console.log(`[Ingest] Uploading to Gemini File API...`);
-    const geminiFileUri = await uploadToGemini(videoBlob, fileName);
-    console.log(
-      `[Ingest] Gemini File URI: ${geminiFileUri}. Waiting for it to be ACTIVE...`,
-    );
-    await waitForGeminiFile(geminiFileUri);
-    console.log(`[Ingest] Gemini File is ACTIVE.`);
+    const { text: transcript, words } = transcriptionResult;
+    console.log(`[Ingest] Transcription and Gemini upload completed. URI: ${geminiFileUri}`);
 
     // 3. Pre-analyze visual actions (to avoid re-querying video later)
     console.log(`[Ingest] Extracting visual actions...`);

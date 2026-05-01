@@ -103,26 +103,43 @@ export async function waitForGeminiFile(fileUri: string) {
   }
 }
 
+const commandCache: Record<string, boolean> = {};
+
+function isCommandAvailable(cmd: string): boolean {
+  if (cmd in commandCache) return commandCache[cmd];
+  try {
+    execSync(`${cmd} -version`, { stdio: "ignore" });
+    commandCache[cmd] = true;
+  } catch {
+    commandCache[cmd] = false;
+  }
+  return commandCache[cmd];
+}
+
 function getVideoDuration(inputPath: string): number {
   try {
+    if (!isCommandAvailable("ffprobe")) {
+      return 0;
+    }
     const cmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`;
     const duration = execSync(cmd).toString().trim();
     return parseFloat(duration);
   } catch (err) {
-    console.error("Error getting video duration:", err);
+    console.error("Error getting video duration via ffprobe:", err);
     return 0;
   }
 }
 
 function extractSegment(inputPath: string, startTime: number, duration: number, outputPath: string) {
   try {
-    // Using -c copy is fast but might not be precise on keyframes. 
-    // For AI analysis, precision is good, but re-encoding is slow. 
-    // Let's try -c copy first for speed.
+    if (!isCommandAvailable("ffmpeg")) {
+      throw new Error("ffmpeg not available");
+    }
     const cmd = `ffmpeg -y -ss ${startTime} -i "${inputPath}" -t ${duration} -c copy "${outputPath}"`;
     execSync(cmd, { stdio: "ignore" });
   } catch (err) {
     console.error(`Error extracting segment at ${startTime}:`, err);
+    throw err;
   }
 }
 
@@ -134,17 +151,27 @@ export async function analyzeVideoActions(fileUri: string, blob?: Blob, fileName
 
   const segmentSize = 300; // 5 minutes
 
-  // If blob is provided, we can try to parallelize for long videos
-  if (blob && fileName) {
+  // Get duration from Gemini metadata first (most reliable on Vercel)
+  const name = fileUri.split("/").pop() || "";
+  const file = await fileManager.getFile(name);
+  let duration = file.videoMetadata?.videoDuration ? parseFloat(file.videoMetadata.videoDuration) : 0;
+  
+  console.log(`[Gemini] Metadata duration: ${duration}s`);
+
+  // If blob is provided AND ffmpeg is available, we can try to parallelize
+  if (blob && fileName && isCommandAvailable("ffmpeg")) {
     const tempDir = os.tmpdir();
     const inputPath = path.join(tempDir, `${crypto.randomUUID()}-${fileName}`);
     const buffer = Buffer.from(await blob.arrayBuffer());
     fs.writeFileSync(inputPath, buffer);
 
-    const duration = getVideoDuration(inputPath);
-    console.log(`[Gemini] Video duration: ${duration}s`);
+    // Backup: try local probe if metadata failed
+    if (duration === 0) {
+      duration = getVideoDuration(inputPath);
+      console.log(`[Gemini] Probed duration: ${duration}s`);
+    }
 
-    if (duration > segmentSize * 1.2) { // Only parallelize if significantly longer than one segment
+    if (duration > segmentSize * 1.2) { 
       console.log(`[Gemini] Parallelizing analysis into ${Math.ceil(duration / segmentSize)} segments...`);
       const segmentPromises: Promise<string>[] = [];
 
