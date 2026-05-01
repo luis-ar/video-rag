@@ -46,7 +46,6 @@ export async function POST(req: Request) {
       type: urlResponse.headers.get("content-type") || "video/mp4",
     });
 
-    // 1. Parallelize Transcription and Gemini Processing (Upload + Analysis)
     console.log(`[Ingest] Starting transcription and Gemini processing in parallel...`);
     const [transcriptionResult, visualDescription] = await Promise.all([
       transcribeWithElevenLabs({
