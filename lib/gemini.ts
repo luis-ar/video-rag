@@ -1,5 +1,10 @@
 import { GoogleGenAI } from "@google/genai";
+import { GoogleAIFileManager, FileState } from "@google/generative-ai/server";
 import { optionalEnv, requireGeminiApiKey } from "@/lib/env";
+import fs from "fs";
+import path from "path";
+import os from "os";
+import { execSync } from "child_process";
 
 let cachedClient: GoogleGenAI | null = null;
 
@@ -54,6 +59,185 @@ export async function embedText(
   return { vector, model };
 }
 
+export async function uploadToGemini(
+  blob: Blob,
+  fileName: string,
+): Promise<string> {
+  const apiKey = requireGeminiApiKey();
+  const fileManager = new GoogleAIFileManager(apiKey);
+
+  // Write blob to a temp file
+  const tempDir = os.tmpdir();
+  const tempPath = path.join(tempDir, `${crypto.randomUUID()}-${fileName}`);
+  const buffer = Buffer.from(await blob.arrayBuffer());
+  fs.writeFileSync(tempPath, buffer);
+
+  try {
+    const mimeType = blob.type || "video/mp4";
+    const uploadResult = await fileManager.uploadFile(tempPath, {
+      mimeType,
+      displayName: fileName,
+    });
+
+    return uploadResult.file.uri;
+  } finally {
+    // Cleanup
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  }
+}
+
+export async function waitForGeminiFile(fileUri: string) {
+  const apiKey = requireGeminiApiKey();
+  const fileManager = new GoogleAIFileManager(apiKey);
+  const name = fileUri.split("/").pop() || "";
+
+  let file = await fileManager.getFile(name);
+  while (file.state === FileState.PROCESSING) {
+    process.stdout.write(".");
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    file = await fileManager.getFile(name);
+  }
+
+  if (file.state !== FileState.ACTIVE) {
+    throw new Error(`File ${file.uri} failed to process: ${file.state}`);
+  }
+}
+
+function getVideoDuration(inputPath: string): number {
+  try {
+    const cmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`;
+    const duration = execSync(cmd).toString().trim();
+    return parseFloat(duration);
+  } catch (err) {
+    console.error("Error getting video duration:", err);
+    return 0;
+  }
+}
+
+function extractSegment(inputPath: string, startTime: number, duration: number, outputPath: string) {
+  try {
+    // Using -c copy is fast but might not be precise on keyframes. 
+    // For AI analysis, precision is good, but re-encoding is slow. 
+    // Let's try -c copy first for speed.
+    const cmd = `ffmpeg -y -ss ${startTime} -i "${inputPath}" -t ${duration} -c copy "${outputPath}"`;
+    execSync(cmd, { stdio: "ignore" });
+  } catch (err) {
+    console.error(`Error extracting segment at ${startTime}:`, err);
+  }
+}
+
+export async function analyzeVideoActions(fileUri: string, blob?: Blob, fileName?: string): Promise<string> {
+  const model = optionalEnv("GEMINI_CHAT_MODEL") || "gemini-2.5-flash";
+  const ai = getClient();
+  const apiKey = requireGeminiApiKey();
+  const fileManager = new GoogleAIFileManager(apiKey);
+
+  const segmentSize = 300; // 5 minutes
+
+  // If blob is provided, we can try to parallelize for long videos
+  if (blob && fileName) {
+    const tempDir = os.tmpdir();
+    const inputPath = path.join(tempDir, `${crypto.randomUUID()}-${fileName}`);
+    const buffer = Buffer.from(await blob.arrayBuffer());
+    fs.writeFileSync(inputPath, buffer);
+
+    const duration = getVideoDuration(inputPath);
+    console.log(`[Gemini] Video duration: ${duration}s`);
+
+    if (duration > segmentSize * 1.2) { // Only parallelize if significantly longer than one segment
+      console.log(`[Gemini] Parallelizing analysis into ${Math.ceil(duration / segmentSize)} segments...`);
+      const segmentPromises: Promise<string>[] = [];
+
+      for (let start = 0; start < duration; start += segmentSize) {
+        const segmentDuration = Math.min(segmentSize, duration - start);
+        const segmentPath = path.join(tempDir, `${crypto.randomUUID()}-seg-${start}.mp4`);
+        
+        const currentStart = start; // Closure
+        segmentPromises.push((async () => {
+          try {
+            extractSegment(inputPath, currentStart, segmentDuration, segmentPath);
+            
+            // Upload segment
+            const uploadResult = await fileManager.uploadFile(segmentPath, {
+              mimeType: "video/mp4",
+              displayName: `${fileName}-seg-${currentStart}`,
+            });
+            await waitForGeminiFile(uploadResult.file.uri);
+
+            // Analyze segment
+            const prompt = `
+              Analyze this video segment (from ${currentStart}s to ${currentStart + segmentDuration}s) and provide a detailed chronological description of the actions.
+              IMPORTANT: Use absolute timestamps based on the offset of ${currentStart}s.
+              Example: if something happens 5s into this clip, write [${currentStart + 5}.0s - ...].
+              
+              For every significant change or action, provide a timestamp range in the format [start_s - end_s] followed by a description.
+            `;
+
+            const resp = await ai.models.generateContent({
+              model,
+              contents: [{
+                role: "user",
+                parts: [
+                  { fileData: { fileUri: uploadResult.file.uri, mimeType: "video/mp4" } },
+                  { text: prompt }
+                ]
+              }],
+            });
+
+            const text = (resp as any)?.candidates?.[0]?.content?.parts?.map((p: any) => p.text || "").join("") || "";
+            
+            // Cleanup segment file
+            if (fs.existsSync(segmentPath)) fs.unlinkSync(segmentPath);
+            
+            return text;
+          } catch (err) {
+            console.error(`Error analyzing segment ${currentStart}:`, err);
+            return "";
+          }
+        })());
+      }
+
+      const results = await Promise.all(segmentPromises);
+      fs.unlinkSync(inputPath);
+      return results.join("\n");
+    }
+    fs.unlinkSync(inputPath);
+  }
+
+  // Fallback to single analysis if short or parallelization fails/skipped
+  const prompt = `
+    Analyze this video and provide a detailed chronological description of the actions, visual scenes, and people's behaviors. 
+    For every significant change or action, provide a timestamp range in the format [start_s - end_s] followed by a description.
+    Example:
+    [0.0s - 5.2s] A person in a blue shirt walks into the room and sits at a desk.
+    [5.2s - 12.0s] The person starts typing on a laptop and looks at the camera.
+    
+    Be specific about what is seen.
+  `;
+
+  const resp = await ai.models.generateContent({
+    model,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { fileData: { fileUri, mimeType: "video/mp4" } },
+          { text: prompt },
+        ],
+      },
+    ],
+  });
+
+  let text = "";
+  const candidates = (resp as any)?.candidates;
+  if (candidates?.[0]?.content?.parts) {
+    text = candidates[0].content.parts.map((p: any) => p.text || "").join("");
+  }
+
+  if (!text) throw new Error("Gemini failed to extract video actions.");
+  return text;
+}
+
 export async function generateAnswer(params: {
   question: string;
   contextChunks: Array<{ id: string; text: string }>;
@@ -67,6 +251,7 @@ export async function generateAnswer(params: {
 
   const prompt = [
     "You are a helpful assistant answering questions about a single video.",
+    "The provided context contains chunks from both the transcript (what is said) and visual analysis (what is seen). Chunks starting with [Visual] are visual descriptions.",
     "Use ONLY the provided context to answer. If the answer isn't in the context, say you don't know.",
     "If the user asks for clips, highlights, or timestamps:",
     "  - Analyze the provided context, find the most important/relevant moments.",
@@ -84,7 +269,12 @@ export async function generateAnswer(params: {
 
   const resp = await ai.models.generateContent({
     model,
-    contents: prompt,
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }],
+      },
+    ],
   });
 
   let text = "";

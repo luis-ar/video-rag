@@ -37,22 +37,20 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 #### Phase 1 — Ingestion (only once per video)
 
-1. User uploads a video/audio file (UI posts `multipart/form-data` to `POST /api/ingest`)
-2. Backend transcribes with ElevenLabs
-3. Transcript is chunked
-4. Gemini generates embeddings per chunk
-5. Vectors are upserted into Pinecone under a namespace = `videoId`
+1. **Upload**: User uploads a video (stored in Cloudflare R2).
+2. **Transcription**: Backend transcribes audio with **ElevenLabs** (word-level timestamps).
+3. **Visual Analysis**: Video is sent to **Gemini 2.0 Flash** to extract chronological visual actions (e.g., "Person sits down at [5s-8s]").
+4. **Multimodal Indexing**: Both transcript chunks and visual description chunks are embedded using Gemini and indexed in **Pinecone**.
 
-Result: ✅ Video indexed
+Result: ✅ Video indexed with full visual and audio awareness.
 
 #### Phase 2 — Query (multiple times)
 
-1. User asks a question (UI posts JSON to `POST /api/query`)
-2. Gemini embeds the question
-3. Pinecone returns the most relevant transcript chunks
-4. Gemini answers using retrieved chunks as context (RAG)
+1. **Retrieval**: User asks a question; Pinecone returns the most relevant visual and transcript chunks.
+2. **Reasoning**: Gemini answers using these chunks + the original video file as context.
+3. **Clipping**: The UI plays specific segments of the video based on the timestamps found by Gemini.
 
-Result: ✅ Response grounded in the video
+Result: ✅ Accurate responses grounded in what was said *and* seen.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 

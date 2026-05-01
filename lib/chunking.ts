@@ -102,3 +102,27 @@ export function chunkWords(
   return chunks;
 }
 
+export function parseVisualChunks(raw: string): WordTextChunk[] {
+  const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
+  const chunks: WordTextChunk[] = [];
+  
+  for (const line of lines) {
+    // Match [0.0s - 5.2s] or [0.0 - 5.2] or similar
+    const match = line.match(/\[\s*([\d.]+)\s*s?\s*-\s*([\d.]+)\s*s?\s*\]\s*(.*)/i);
+    if (match) {
+      const start = parseFloat(match[1]);
+      const end = parseFloat(match[2]);
+      const text = match[3].trim();
+      if (text) {
+        chunks.push({
+          index: chunks.length,
+          text: `[Visual] ${text}`,
+          start,
+          end
+        });
+      }
+    }
+  }
+  return chunks;
+}
+

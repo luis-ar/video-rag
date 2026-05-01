@@ -3,7 +3,13 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 
 type IngestResult =
-  | { ok: true; videoId: string; videoUrl: string; chunkCount: number; transcriptChars: number }
+  | {
+      ok: true;
+      videoId: string;
+      videoUrl: string;
+      chunkCount: number;
+      transcriptChars: number;
+    }
   | { error: string };
 
 type QueryResult =
@@ -17,7 +23,15 @@ type QueryResult =
     }
   | { error: string };
 
-function ClipPlayer({ videoUrl, start, end }: { videoUrl: string; start: number; end: number }) {
+function ClipPlayer({
+  videoUrl,
+  start,
+  end,
+}: {
+  videoUrl: string;
+  start: number;
+  end: number;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -35,7 +49,7 @@ function ClipPlayer({ videoUrl, start, end }: { videoUrl: string; start: number;
       onTimeUpdate={(e) => {
         const v = e.currentTarget;
         if (!Number.isFinite(start) || !Number.isFinite(end)) return;
-        
+
         if (v.currentTime >= end) {
           v.pause();
           v.currentTime = end;
@@ -58,7 +72,8 @@ export default function Home() {
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
 
   const effectiveVideoId = useMemo(() => {
-    if (ingestResult && "ok" in ingestResult && ingestResult.ok) return ingestResult.videoId;
+    if (ingestResult && "ok" in ingestResult && ingestResult.ok)
+      return ingestResult.videoId;
     return videoId.trim();
   }, [ingestResult, videoId]);
 
@@ -85,9 +100,12 @@ export default function Home() {
       });
       if (videoId.trim()) params.append("videoId", videoId.trim());
 
-      const urlRes = await fetch(`/api/storage/presigned-url?${params.toString()}`);
+      const urlRes = await fetch(
+        `/api/storage/presigned-url?${params.toString()}`,
+      );
       const urlData = await urlRes.json();
-      if (!urlRes.ok) throw new Error(urlData.error || "Failed to get upload URL");
+      if (!urlRes.ok)
+        throw new Error(urlData.error || "Failed to get upload URL");
 
       const { presignedUrl, videoUrl, videoId: finalVideoId } = urlData;
 
@@ -112,8 +130,9 @@ export default function Home() {
       });
 
       const json = (await ingestRes.json()) as IngestResult;
-      if (!ingestRes.ok) throw new Error(("error" in json && json.error) || "Indexing failed");
-      
+      if (!ingestRes.ok)
+        throw new Error(("error" in json && json.error) || "Indexing failed");
+
       setIngestResult(json);
       if ("ok" in json && json.ok) {
         setVideoUrl(json.videoUrl);
@@ -146,10 +165,15 @@ export default function Home() {
       const res = await fetch("/api/query", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ videoId: effectiveVideoId, question: question.trim(), topK: 50 }),
+        body: JSON.stringify({
+          videoId: effectiveVideoId,
+          question: question.trim(),
+          topK: 50,
+        }),
       });
       const json = (await res.json()) as QueryResult;
-      if (!res.ok) throw new Error(("error" in json && json.error) || "Query failed");
+      if (!res.ok)
+        throw new Error(("error" in json && json.error) || "Query failed");
       setQueryResult(json);
       if ("ok" in json && json.ok && json.videoUrl) {
         setVideoUrl(json.videoUrl);
@@ -166,7 +190,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!videoFile) return;
-    
+
     const url = URL.createObjectURL(videoFile);
     setVideoUrl(url);
     return () => URL.revokeObjectURL(url);
@@ -174,7 +198,7 @@ export default function Home() {
 
   function parseSafeFloat(val: unknown): number {
     if (typeof val === "number") return Number.isFinite(val) ? val : 0;
-    const str = String(val).replace(/[^0-9.]/g, '');
+    const str = String(val).replace(/[^0-9.]/g, "");
     const p = parseFloat(str);
     return Number.isFinite(p) ? p : 0;
   }
@@ -185,8 +209,13 @@ export default function Home() {
       const match = queryResult.answer.match(/\[\s*\{[\s\S]*\}\s*\]/);
       if (match) {
         const parsed = JSON.parse(match[0]);
-        if (Array.isArray(parsed) && parsed.length > 0 && "start" in parsed[0] && "end" in parsed[0]) {
-          return parsed.map(c => ({
+        if (
+          Array.isArray(parsed) &&
+          parsed.length > 0 &&
+          "start" in parsed[0] &&
+          "end" in parsed[0]
+        ) {
+          return parsed.map((c) => ({
             start: parseSafeFloat(c.start),
             end: parseSafeFloat(c.end),
             text: String(c.text || ""),
@@ -199,7 +228,9 @@ export default function Home() {
     return null;
   }, [queryResult]);
 
-  const [availableVideos, setAvailableVideos] = useState<Array<{ id: string; name: string }>>([]);
+  const [availableVideos, setAvailableVideos] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
 
   async function fetchVideos() {
     try {
@@ -221,15 +252,19 @@ export default function Home() {
     <div className="flex flex-1 flex-col bg-zinc-50 font-sans text-zinc-950 dark:bg-black dark:text-zinc-50">
       <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-10 px-6 py-12">
         <header className="flex flex-col gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">Video RAG (ElevenLabs → Gemini → Pinecone)</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">
+            Video RAG (ElevenLabs → Gemini → Pinecone)
+          </h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Index a video once, then ask questions multiple times. All answers are grounded in retrieved transcript
-            chunks.
+            Index a video once, then ask questions multiple times. All answers
+            are grounded in retrieved transcript chunks.
           </p>
         </header>
 
         <section className="rounded-2xl border border-black/10 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-zinc-950">
-          <h2 className="text-lg font-semibold">Phase 1 — Ingestion (only once per video)</h2>
+          <h2 className="text-lg font-semibold">
+            Phase 1 — Ingestion (only once per video)
+          </h2>
           <form className="mt-4 flex flex-col gap-4" onSubmit={onIndexVideo}>
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">Video/audio file</span>
@@ -256,14 +291,16 @@ export default function Home() {
               disabled={isIndexing}
               className="inline-flex h-11 items-center justify-center rounded-xl bg-black px-4 text-sm font-medium text-white disabled:opacity-60 dark:bg-white dark:text-black"
             >
-              {isIndexing ? (ingestStatus || "Indexing…") : "Index video"}
+              {isIndexing ? ingestStatus || "Indexing…" : "Index video"}
             </button>
           </form>
 
           {ingestResult && (
             <div className="mt-4 rounded-xl border border-black/10 bg-zinc-50 p-4 text-sm dark:border-white/10 dark:bg-black">
               {"error" in ingestResult ? (
-                <p className="text-red-600 dark:text-red-400">{ingestResult.error}</p>
+                <p className="text-red-600 dark:text-red-400">
+                  {ingestResult.error}
+                </p>
               ) : (
                 <div className="flex flex-col gap-1">
                   <p>
@@ -271,7 +308,8 @@ export default function Home() {
                     <span className="font-mono">{ingestResult.videoId}</span>
                   </p>
                   <p className="text-zinc-600 dark:text-zinc-400">
-                    chunks: {ingestResult.chunkCount} · transcript chars: {ingestResult.transcriptChars}
+                    chunks: {ingestResult.chunkCount} · transcript chars:{" "}
+                    {ingestResult.transcriptChars}
                   </p>
                 </div>
               )}
@@ -280,7 +318,9 @@ export default function Home() {
         </section>
 
         <section className="rounded-2xl border border-black/10 bg-white p-6 shadow-sm dark:border-white/10 dark:bg-zinc-950">
-          <h2 className="text-lg font-semibold">Phase 2 — Query (repeat as needed)</h2>
+          <h2 className="text-lg font-semibold">
+            Phase 2 — Query (repeat as needed)
+          </h2>
           <form className="mt-4 flex flex-col gap-4" onSubmit={onAsk}>
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium">Video</span>
@@ -292,10 +332,15 @@ export default function Home() {
                 }}
                 className="w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm dark:border-white/10"
               >
-                <option value="" disabled>-- Select an ingested video --</option>
-                {effectiveVideoId && !availableVideos.some(v => v.id === effectiveVideoId) && (
-                  <option value={effectiveVideoId}>{effectiveVideoId} - Just Uploaded</option>
-                )}
+                <option value="" disabled>
+                  -- Select an ingested video --
+                </option>
+                {effectiveVideoId &&
+                  !availableVideos.some((v) => v.id === effectiveVideoId) && (
+                    <option value={effectiveVideoId}>
+                      {effectiveVideoId} - Just Uploaded
+                    </option>
+                  )}
                 {availableVideos.map((v) => (
                   <option key={v.id} value={v.id}>
                     {v.id} - {v.name}
@@ -327,7 +372,9 @@ export default function Home() {
           {queryResult && (
             <div className="mt-4 rounded-xl border border-black/10 bg-zinc-50 p-4 text-sm dark:border-white/10 dark:bg-black">
               {"error" in queryResult ? (
-                <p className="text-red-600 dark:text-red-400">{queryResult.error}</p>
+                <p className="text-red-600 dark:text-red-400">
+                  {queryResult.error}
+                </p>
               ) : (
                 <div className="flex flex-col gap-3">
                   <div>
@@ -335,9 +382,18 @@ export default function Home() {
                     {parsedClips && videoUrl ? (
                       <div className="mt-4 flex flex-col gap-6">
                         {parsedClips.map((clip, i) => (
-                          <div key={i} className="flex flex-col gap-3 rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-zinc-900">
-                            <ClipPlayer videoUrl={videoUrl} start={clip.start} end={clip.end} />
-                            <p className="text-sm text-zinc-800 dark:text-zinc-200">{clip.text}</p>
+                          <div
+                            key={i}
+                            className="flex flex-col gap-3 rounded-xl border border-black/10 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-zinc-900"
+                          >
+                            <ClipPlayer
+                              videoUrl={videoUrl}
+                              start={clip.start}
+                              end={clip.end}
+                            />
+                            <p className="text-sm text-zinc-800 dark:text-zinc-200">
+                              {clip.text}
+                            </p>
                             <p className="text-xs font-mono text-zinc-500">
                               {clip.start}s - {clip.end}s
                             </p>
@@ -345,10 +401,13 @@ export default function Home() {
                         ))}
                       </div>
                     ) : (
-                      <p className="mt-1 whitespace-pre-wrap text-zinc-900 dark:text-zinc-100">{queryResult.answer}</p>
+                      <p className="mt-1 whitespace-pre-wrap text-zinc-900 dark:text-zinc-100">
+                        {queryResult.answer}
+                      </p>
                     )}
                     <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">
-                      model: {queryResult.model} · matches: {queryResult.matches.length}
+                      model: {queryResult.model} · matches:{" "}
+                      {queryResult.matches.length}
                     </p>
                   </div>
                   <div>
@@ -356,8 +415,13 @@ export default function Home() {
                     <ul className="mt-2 space-y-1 text-xs text-zinc-700 dark:text-zinc-300">
                       {queryResult.matches.map((m) => (
                         <li key={m.id} className="font-mono">
-                          {m.id} {typeof m.score === "number" ? `(${m.score.toFixed(3)})` : ""}{" "}
-                          {typeof m.chunkIndex === "number" ? `chunk=${m.chunkIndex}` : ""}
+                          {m.id}{" "}
+                          {typeof m.score === "number"
+                            ? `(${m.score.toFixed(3)})`
+                            : ""}{" "}
+                          {typeof m.chunkIndex === "number"
+                            ? `chunk=${m.chunkIndex}`
+                            : ""}
                         </li>
                       ))}
                     </ul>
