@@ -3,6 +3,7 @@ import { chunkText, chunkWords, parseVisualChunks } from "@/lib/chunking";
 import { transcribeWithElevenLabs } from "@/lib/elevenlabs";
 import {
   embedText,
+  batchEmbedText,
   uploadToGemini,
   waitForGeminiFile,
   analyzeVideoActions,
@@ -45,9 +46,9 @@ export async function POST(req: Request) {
       type: urlResponse.headers.get("content-type") || "video/mp4",
     });
 
-    // 1. Parallelize ElevenLabs and Gemini Upload/Wait
-    console.log(`[Ingest] Starting transcription and Gemini upload in parallel...`);
-    const [transcriptionResult, geminiFileUri] = await Promise.all([
+    // 1. Parallelize Transcription and Gemini Processing (Upload + Analysis)
+    console.log(`[Ingest] Starting transcription and Gemini processing in parallel...`);
+    const [transcriptionResult, visualDescription] = await Promise.all([
       transcribeWithElevenLabs({
         file: videoFileForAnalysis,
         languageCode,
@@ -55,16 +56,14 @@ export async function POST(req: Request) {
       (async () => {
         const uri = await uploadToGemini(videoBlob, fileName);
         await waitForGeminiFile(uri);
-        return uri;
+        console.log(`[Ingest] Gemini file active. Starting visual analysis...`);
+        return analyzeVideoActions(uri, videoBlob, fileName);
       })(),
     ]);
 
     const { text: transcript, words } = transcriptionResult;
-    console.log(`[Ingest] Transcription and Gemini upload completed. URI: ${geminiFileUri}`);
-
-    // 3. Pre-analyze visual actions (to avoid re-querying video later)
-    console.log(`[Ingest] Extracting visual actions...`);
-    const visualDescription = await analyzeVideoActions(geminiFileUri, videoBlob, fileName);
+    console.log(`[Ingest] Transcription and Gemini analysis completed.`);
+    
     const visualChunks = parseVisualChunks(visualDescription);
     console.log(`[Ingest] Extracted ${visualChunks.length} visual chunks.`);
 
@@ -88,32 +87,35 @@ export async function POST(req: Request) {
     }
 
     console.log(`[Ingest] Generating embeddings for ${allChunks.length} chunks...`);
-    const vectors = await Promise.all(
-      allChunks.map(async (chunk, i) => {
-        const isWordOrVisual = "start" in chunk;
-        const metadataText = isWordOrVisual
-          ? `[${chunk.start.toFixed(1)}s - ${chunk.end.toFixed(1)}s] ${chunk.text}`
-          : chunk.text;
+    const metadataTexts = allChunks.map((chunk) => {
+      const isWordOrVisual = "start" in chunk;
+      return isWordOrVisual
+        ? `[${chunk.start.toFixed(1)}s - ${chunk.end.toFixed(1)}s] ${chunk.text}`
+        : chunk.text;
+    });
 
-        const { vector } = await embedText(metadataText, {
-          taskType: "RETRIEVAL_DOCUMENT",
-        });
+    const { vectors: embeddingVectors } = await batchEmbedText(metadataTexts, {
+      taskType: "RETRIEVAL_DOCUMENT",
+    });
 
-        return {
-          id: `${videoId}:${i}`,
-          values: vector,
-          metadata: {
-            videoId,
-            videoUrl,
-            chunkIndex: i,
-            text: metadataText,
-            sourceFileName: fileName,
-            contentType: chunk.type,
-            ...(isWordOrVisual ? { start: chunk.start, end: chunk.end } : {}),
-          },
-        };
-      }),
-    );
+    const vectors = allChunks.map((chunk, i) => {
+      const isWordOrVisual = "start" in chunk;
+      const metadataText = metadataTexts[i];
+
+      return {
+        id: `${videoId}:${i}`,
+        values: embeddingVectors[i],
+        metadata: {
+          videoId,
+          videoUrl,
+          chunkIndex: i,
+          text: metadataText,
+          sourceFileName: fileName,
+          contentType: chunk.type,
+          ...(isWordOrVisual ? { start: chunk.start, end: chunk.end } : {}),
+        },
+      };
+    });
 
     const batchSize = 50;
     for (let i = 0; i < vectors.length; i += batchSize) {

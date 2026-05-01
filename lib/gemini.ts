@@ -15,10 +15,10 @@ function getClient(): GoogleGenAI {
 }
 
 function extractEmbeddingVector(resp: unknown): number[] {
-  const r =
-    resp && typeof resp === "object" ? (resp as Record<string, unknown>) : null;
+  const r = resp && typeof resp === "object" ? (resp as Record<string, unknown>) : null;
   if (!r) return [];
 
+  // Single result format
   const embedding = r["embedding"];
   if (embedding && typeof embedding === "object") {
     const e = embedding as Record<string, unknown>;
@@ -26,18 +26,31 @@ function extractEmbeddingVector(resp: unknown): number[] {
     if (Array.isArray(v)) return v.map(Number).filter(Number.isFinite);
   }
 
+  // Batch result format (or alternate single)
   const embeddings = r["embeddings"];
-  if (
-    Array.isArray(embeddings) &&
-    embeddings[0] &&
-    typeof embeddings[0] === "object"
-  ) {
+  if (Array.isArray(embeddings) && embeddings[0] && typeof embeddings[0] === "object") {
     const e0 = embeddings[0] as Record<string, unknown>;
     const v = e0["values"] ?? e0["value"];
     if (Array.isArray(v)) return v.map(Number).filter(Number.isFinite);
   }
 
   return [];
+}
+
+function extractEmbeddingVectors(resp: unknown): number[][] {
+  const r = resp && typeof resp === "object" ? (resp as Record<string, unknown>) : null;
+  if (!r) return [];
+
+  const embeddings = r["embeddings"];
+  if (Array.isArray(embeddings)) {
+    return embeddings.map((e: any) => {
+      const v = e["values"] ?? e["value"];
+      return Array.isArray(v) ? v.map(Number).filter(Number.isFinite) : [];
+    });
+  }
+
+  const single = extractEmbeddingVector(resp);
+  return single.length > 0 ? [single] : [];
 }
 
 export async function embedText(
@@ -57,6 +70,28 @@ export async function embedText(
   if (vector.length === 0)
     throw new Error("Gemini embeddings returned an empty vector");
   return { vector, model };
+}
+
+export async function batchEmbedText(
+  texts: string[],
+  opts?: { taskType?: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY" },
+) {
+  const model = optionalEnv("GEMINI_EMBED_MODEL") || "gemini-embedding-001";
+  const ai = getClient();
+
+  // The @google/genai SDK supports passing multiple strings in contents for models that support it
+  // For models like gemini-embedding-001, we might need to use a specific batching pattern 
+  // but many modern Gemini models support array of contents.
+  const resp = await ai.models.embedContent({
+    model,
+    contents: texts,
+    config: opts?.taskType ? { taskType: opts.taskType } : undefined,
+  });
+
+  const vectors = extractEmbeddingVectors(resp);
+  if (vectors.length === 0)
+    throw new Error("Gemini batch embeddings returned no vectors");
+  return { vectors, model };
 }
 
 export async function uploadToGemini(
