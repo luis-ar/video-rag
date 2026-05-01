@@ -232,7 +232,15 @@ export async function analyzeVideoActions(fileUri: string, blob?: Blob, fileName
   }
 
   // Fallback to single analysis if short or parallelization fails/skipped
-  const prompt = `
+  const isLongVideo = duration > 900; // 15 minutes
+  const prompt = isLongVideo
+    ? `
+    This is a long video. Provide a concise chronological summary of the most significant visual scenes, key actions, and major behavior changes. 
+    Focus on major transitions and important events.
+    For every significant moment, provide a timestamp range in the format [start_s - end_s] followed by a description.
+    Aim for 15-30 high-quality chunks total.
+    `
+    : `
     Analyze this video and provide a detailed chronological description of the actions, visual scenes, and people's behaviors. 
     For every significant change or action, provide a timestamp range in the format [start_s - end_s] followed by a description.
     Example:
@@ -240,7 +248,7 @@ export async function analyzeVideoActions(fileUri: string, blob?: Blob, fileName
     [5.2s - 12.0s] The person starts typing on a laptop and looks at the camera.
     
     Be specific about what is seen.
-  `;
+    `;
 
   const resp = await ai.models.generateContent({
     model,

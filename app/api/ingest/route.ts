@@ -87,35 +87,33 @@ export async function POST(req: Request) {
       );
     }
 
-    const vectors: Array<{
-      id: string;
-      values: number[];
-      metadata: Record<string, string | number | boolean | string[]>;
-    }> = [];
-    for (let i = 0; i < allChunks.length; i++) {
-      const chunk = allChunks[i];
-      const isWordOrVisual = "start" in chunk;
-      const metadataText = isWordOrVisual
-        ? `[${chunk.start.toFixed(1)}s - ${chunk.end.toFixed(1)}s] ${chunk.text}`
-        : chunk.text;
+    console.log(`[Ingest] Generating embeddings for ${allChunks.length} chunks...`);
+    const vectors = await Promise.all(
+      allChunks.map(async (chunk, i) => {
+        const isWordOrVisual = "start" in chunk;
+        const metadataText = isWordOrVisual
+          ? `[${chunk.start.toFixed(1)}s - ${chunk.end.toFixed(1)}s] ${chunk.text}`
+          : chunk.text;
 
-      const { vector } = await embedText(metadataText, {
-        taskType: "RETRIEVAL_DOCUMENT",
-      });
-      vectors.push({
-        id: `${videoId}:${i}`,
-        values: vector,
-        metadata: {
-          videoId,
-          videoUrl,
-          chunkIndex: i,
-          text: metadataText,
-          sourceFileName: fileName,
-          contentType: chunk.type,
-          ...(isWordOrVisual ? { start: chunk.start, end: chunk.end } : {}),
-        },
-      });
-    }
+        const { vector } = await embedText(metadataText, {
+          taskType: "RETRIEVAL_DOCUMENT",
+        });
+
+        return {
+          id: `${videoId}:${i}`,
+          values: vector,
+          metadata: {
+            videoId,
+            videoUrl,
+            chunkIndex: i,
+            text: metadataText,
+            sourceFileName: fileName,
+            contentType: chunk.type,
+            ...(isWordOrVisual ? { start: chunk.start, end: chunk.end } : {}),
+          },
+        };
+      }),
+    );
 
     const batchSize = 50;
     for (let i = 0; i < vectors.length; i += batchSize) {
